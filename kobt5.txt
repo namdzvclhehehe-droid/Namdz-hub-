@@ -1,0 +1,2984 @@
+"local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local Lighting = game:GetService("Lighting")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local VirtualUser = game:GetService("VirtualUser")
+
+local LocalPlayer = Players.LocalPlayer
+local Events = ReplicatedStorage:WaitForChild("Events")
+local Info = ReplicatedStorage:WaitForChild("Info")
+local DataFolder = ReplicatedStorage:WaitForChild("Data")
+local PlayerData = DataFolder:WaitForChild(LocalPlayer.UserId)
+
+local ToggleHotbar = Events:WaitForChild("ToggleHotbar")
+local FishingEvent = Events:WaitForChild("Fishing")
+local UpdateFishProgression = Events:WaitForChild("UpdateFishProgression")
+local UseSkill = Events:WaitForChild("UseSkill")
+local SellFish = Events:WaitForChild("SellFish")
+local CraftBaitEvent = Events:WaitForChild("CraftBait")
+local CraftRodEvent = Events:WaitForChild("CraftRod")
+local RedeemCodeEvent = Events:WaitForChild("RedeemCode")
+
+local Config = {
+    AutoCast = false,
+    AutoReel = false,
+    AutoMiniGame = false,
+    BossMode = "Normal",
+    AutoBoss = false,
+    AutoSecretBoss = false,
+    AutoSkill = false,
+    SkillOrder = {"Z", "X", "C", "V"},
+    AutoSell = false,
+    SellDelay = 1,
+    SelectedBuyBait = "",
+    BuyBaitAmount = 1,
+    AutoBuyBait = false,
+    SelectedBait = "",
+    BaitAmount = 1,
+    AutoCraftBait = false,
+    SelectedRod = "",
+    AutoCraftRod = false,
+    SelectedIsland = "",
+    SelectedNPC = "",
+    ESPEnabled = false,
+    FullBright = false,
+    NoFog = false,
+    LoopSpeedEnabled = false,
+    WalkSpeed = 30,
+    NoclipEnabled = false,
+    InfJumpEnabled = false,
+    FlyEnabled = false,
+    FlySpeed = 2,
+    FloatSize = 46,
+    NoclipFloatPos = { xs = 0.85, xo = 0, ys = 0.5, yo = -54 },
+    NoclipFloatVisible = false,
+    FlyFloatPos = { xs = 0.85, xo = 0, ys = 0.5, yo = -108 },
+    FlyFloatVisible = false,
+    FlyKeybind = "F",
+    FlyKeybindEnabled = true,
+    NoclipKeybind = "J",
+    NoclipKeybindEnabled = true,
+    DisableAllKeybinds = false
+}
+
+local SAVE_FOLDER = "namdzHub"
+local SAVE_FILE = SAVE_FOLDER .. "/HeavyweighFishingConfig.json"
+
+local function SaveConfig()
+    pcall(function()
+        if not isfolder(SAVE_FOLDER) then makefolder(SAVE_FOLDER) end
+        writefile(SAVE_FILE, HttpService:JSONEncode(Config))
+    end)
+end
+
+local function LoadConfig()
+    pcall(function()
+        if isfile(SAVE_FILE) then
+            local decoded = HttpService:JSONDecode(readfile(SAVE_FILE))
+            for k, v in pairs(decoded) do
+                if Config[k] ~= nil then
+                    Config[k] = v
+                end
+            end
+        end
+    end)
+end
+
+LoadConfig()
+if type(Config.SkillOrder) ~= "table" then
+    Config.SkillOrder = {"Z", "X", "C", "V"}
+end
+
+local ModuleCache = {}
+
+local function GetModuleData(mod)
+    if not mod or not mod:IsA("ModuleScript") then return nil end
+    local cached = ModuleCache[mod]
+    if cached ~= nil then
+        return cached ~= false and cached or nil
+    end
+    local ok, data = pcall(require, mod)
+    if ok and type(data) == "table" then
+        ModuleCache[mod] = data
+        return data
+    end
+    ModuleCache[mod] = false
+    return nil
+end
+
+LocalPlayer.Idled:Connect(function()
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new(0, 0))
+    end)
+end)
+
+if getconnections then
+    for _, conn in pairs(getconnections(LocalPlayer.Idled)) do
+        if conn.Disable then
+            conn:Disable()
+        elseif conn.Disconnect then
+            conn:Disconnect()
+        end
+    end
+end
+
+local cachedChar = LocalPlayer.Character
+local cachedHum = cachedChar and cachedChar:FindFirstChildOfClass("Humanoid")
+local cachedHrp = cachedChar and cachedChar:FindFirstChild("HumanoidRootPart")
+local cachedSkillsFolder = cachedChar and cachedChar:FindFirstChild("Skills")
+local cachedStatsFolder = cachedChar and cachedChar:FindFirstChild("Stats")
+local FishesFolder = workspace:FindFirstChild("Fishes")
+
+local MainGui = LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("MainGui")
+local FishingGui = MainGui:WaitForChild("Fishing")
+local BarFrame = FishingGui:WaitForChild("BarFrame")
+local FishingBar = BarFrame:WaitForChild("Bar")
+local SkillBtnFrame = FishingGui:WaitForChild("SkillButton"):WaitForChild("Frame")
+local RhythmGui = FishingGui:FindFirstChild("Rhythm")
+
+local function RefreshGuiCache()
+    if not MainGui or not MainGui.Parent then
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        MainGui = pg and pg:FindFirstChild("MainGui")
+        FishingGui = MainGui and MainGui:FindFirstChild("Fishing")
+        BarFrame = FishingGui and FishingGui:FindFirstChild("BarFrame")
+        FishingBar = BarFrame and BarFrame:FindFirstChild("Bar")
+        local sb = FishingGui and FishingGui:FindFirstChild("SkillButton")
+        SkillBtnFrame = sb and sb:FindFirstChild("Frame")
+        RhythmGui = FishingGui and FishingGui:FindFirstChild("Rhythm")
+    elseif not RhythmGui or not RhythmGui.Parent then
+        RhythmGui = FishingGui and FishingGui:FindFirstChild("Rhythm")
+    end
+    if not FishesFolder or not FishesFolder.Parent then
+        FishesFolder = workspace:FindFirstChild("Fishes")
+    end
+end
+
+local _noclipThrottle = 0
+RunService.Stepped:Connect(function(_, dt)
+    if not Config.NoclipEnabled and not Config.LoopSpeedEnabled then return end
+    _noclipThrottle = _noclipThrottle + dt
+    if _noclipThrottle < 0.08 then return end
+    _noclipThrottle = 0
+
+    local char = cachedChar
+    if not char or not char.Parent then return end
+
+    if Config.NoclipEnabled then
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") and part.CanCollide then
+                part.CanCollide = false
+            end
+        end
+    end
+
+    if Config.LoopSpeedEnabled and cachedHum and cachedHum.WalkSpeed ~= Config.WalkSpeed then
+        cachedHum.WalkSpeed = Config.WalkSpeed
+    end
+end)
+
+local lastInfJumpTick = 0
+
+local function IsInsideOceanWater(hrp)
+    if not hrp then return false end
+    local ocean = workspace:FindFirstChild("Ocean")
+    if not ocean then return false end
+    local pos = hrp.Position
+    for _, child in ipairs(ocean:GetChildren()) do
+        if child.Name == "Water" and child:IsA("BasePart") then
+            local half = child.Size * 0.5
+            local diff = child.Position - pos
+            if math.abs(diff.X) <= half.X and math.abs(diff.Y) <= half.Y and math.abs(diff.Z) <= half.Z then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+UserInputService.JumpRequest:Connect(function()
+    if not Config.InfJumpEnabled then return end
+    local now = os.clock()
+    if now - lastInfJumpTick < 0.18 then return end
+    local char = cachedChar or LocalPlayer.Character
+    local hum = cachedHum or (char and char:FindFirstChildOfClass("Humanoid"))
+    local hrp = cachedHrp or (char and char:FindFirstChild("HumanoidRootPart"))
+    if not char or not hum or not hrp or hum.Health <= 0 then return end
+    if char:GetAttribute("Swimming") == true or hrp:FindFirstChildOfClass("BodyPosition") or IsInsideOceanWater(hrp) then
+        return
+    end
+    lastInfJumpTick = now
+    hum:ChangeState(Enum.HumanoidStateType.Jumping)
+end)
+
+local flyConnection = nil
+local jumpStateConnection = nil
+
+local function startFly()
+    local char = LocalPlayer.Character
+    if not char then return end
+
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+
+    if not hrp or not humanoid then return end
+
+    humanoid.PlatformStand = true
+
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    bv.Velocity = Vector3.zero
+    bv.Parent = hrp
+
+    local bg = Instance.new("BodyGyro")
+    bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+    bg.P = 1e7
+    bg.D = 12000
+    bg.CFrame = hrp.CFrame
+    bg.Parent = hrp
+
+    jumpStateConnection = humanoid.StateChanged:Connect(function(_, new)
+        if new == Enum.HumanoidStateType.Jumping or new == Enum.HumanoidStateType.Freefall then
+            humanoid.PlatformStand = true
+        end
+    end)
+
+    flyConnection = RunService.RenderStepped:Connect(function()
+        local cam = workspace.CurrentCamera
+        local move = Vector3.zero
+        local md = humanoid.MoveDirection
+
+        if md.Magnitude > 0 then
+            local flatLook = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
+            local flatRight = Vector3.new(cam.CFrame.RightVector.X, 0, cam.CFrame.RightVector.Z)
+
+            if flatLook.Magnitude > 0.01 and flatRight.Magnitude > 0.01 then
+                local fwdAmt = md:Dot(flatLook.Unit)
+                local rightAmt = md:Dot(flatRight.Unit)
+
+                move += cam.CFrame.LookVector * fwdAmt
+                move += cam.CFrame.RightVector * rightAmt
+            end
+        end
+
+        if move.Magnitude > 0 then move = move.Unit end
+        bv.Velocity = move * Config.FlySpeed * 50
+        local look = cam.CFrame.LookVector
+        bg.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + look, Vector3.new(0, 1, 0))
+    end)
+end
+
+local function stopFly()
+    local char = LocalPlayer.Character
+    if not char then return end
+
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+
+    if humanoid then humanoid.PlatformStand = false end
+    if jumpStateConnection then
+        jumpStateConnection:Disconnect()
+        jumpStateConnection = nil
+    end
+    if flyConnection then
+        flyConnection:Disconnect()
+        flyConnection = nil
+    end
+    if hrp then
+        for _, v in pairs(hrp:GetChildren()) do
+            if v:IsA("BodyVelocity") or v:IsA("BodyGyro") then
+                v:Destroy()
+            end
+        end
+    end
+end
+
+local function IsAntiConfuseActive()
+    return Config.AutoMiniGame or Config.AutoBoss or Config.AutoSecretBoss
+end
+
+local function ApplyAntiConfuse(char)
+    if not IsAntiConfuseActive() then return end
+    if char then
+        if char:GetAttribute("Confused") == true then
+            pcall(function() char:SetAttribute("Confused", false) end)
+        end
+        if char:GetAttribute("SkillLocked") == true then
+            pcall(function() char:SetAttribute("SkillLocked", false) end)
+        end
+    end
+    if SkillBtnFrame then
+        for _, btn in ipairs(SkillBtnFrame:GetChildren()) do
+            if btn:IsA("TextButton") then
+                local lock = btn:FindFirstChild("Lock")
+                if lock and lock.Visible then
+                    lock.Visible = false
+                end
+            end
+        end
+    end
+    if FishingGui then
+        local hpPlayer = FishingGui:FindFirstChild("HPPlayer")
+        local debuff = hpPlayer and hpPlayer:FindFirstChild("Debuff")
+        local confusedGui = debuff and debuff:FindFirstChild("Confused")
+        if confusedGui then
+            pcall(function() confusedGui:Destroy() end)
+        end
+    end
+end
+
+local antiConfuseConns = {}
+
+local function BindCharacterAntiConfuse(char)
+    for _, c in ipairs(antiConfuseConns) do
+        pcall(function() c:Disconnect() end)
+    end
+    table.clear(antiConfuseConns)
+    if not char then return end
+    table.insert(antiConfuseConns, char:GetAttributeChangedSignal("Confused"):Connect(function()
+        if IsAntiConfuseActive() and char:GetAttribute("Confused") == true then
+            ApplyAntiConfuse(char)
+        end
+    end))
+    table.insert(antiConfuseConns, char:GetAttributeChangedSignal("SkillLocked"):Connect(function()
+        if IsAntiConfuseActive() and char:GetAttribute("SkillLocked") == true then
+            ApplyAntiConfuse(char)
+        end
+    end))
+    if IsAntiConfuseActive() then
+        ApplyAntiConfuse(char)
+    end
+end
+
+if cachedChar then
+    BindCharacterAntiConfuse(cachedChar)
+end
+
+LocalPlayer.CharacterAdded:Connect(function(newChar)
+    cachedChar = newChar
+    cachedHum = newChar:WaitForChild("Humanoid", 5)
+    cachedHrp = newChar:WaitForChild("HumanoidRootPart", 5)
+    cachedSkillsFolder = newChar:WaitForChild("Skills", 5)
+    cachedStatsFolder = newChar:WaitForChild("Stats", 5)
+    BindCharacterAntiConfuse(newChar)
+    task.wait(0.3)
+    if Config.FlyEnabled then
+        startFly()
+    end
+end)
+
+local minigameOpenTick = 0
+local wasMinigameVisible = false
+
+local function IsGameAllowingSkill(char)
+    if not FishingGui or not FishingGui.Visible then
+        wasMinigameVisible = false
+        return false
+    end
+
+    if not wasMinigameVisible then
+        wasMinigameVisible = true
+        minigameOpenTick = os.clock()
+    end
+
+    if RhythmGui and RhythmGui.Visible then
+        return false
+    end
+
+    if char:GetAttribute("Phase2") then
+        return false
+    end
+
+    if not IsAntiConfuseActive() then
+        if char:GetAttribute("SkillLocked") or char:GetAttribute("Confused") then
+            return false
+        end
+    else
+        ApplyAntiConfuse(char)
+    end
+
+    local stats = cachedStatsFolder or char:FindFirstChild("Stats")
+    if stats and stats:FindFirstChild("Stun") and stats.Stun.Value == true then
+        return false
+    end
+
+    local fishId = LocalPlayer:GetAttribute("FishID")
+    local fishObj = (fishId and FishesFolder) and FishesFolder:FindFirstChild(fishId) or nil
+    if fishObj then
+        local readyVal = fishObj:FindFirstChild("Ready")
+        if readyVal then
+            if readyVal.Value ~= true then
+                return false
+            end
+        elseif os.clock() - minigameOpenTick < 3.1 then
+            return false
+        end
+        if fishObj:GetAttribute("FinalPhase") == true or fishObj:GetAttribute("PreFinalPhase") == true then
+            return false
+        end
+    elseif os.clock() - minigameOpenTick < 3.1 then
+        return false
+    end
+
+    if SkillBtnFrame then
+        for _, btn in ipairs(SkillBtnFrame:GetChildren()) do
+            if btn:IsA("TextButton") and btn.Visible then
+                local cd = btn:FindFirstChild("CD")
+                if cd and cd.Visible and cd.Text == "" then
+                    return false
+                end
+            end
+        end
+    end
+
+    local skillsFolder = cachedSkillsFolder or char:FindFirstChild("Skills")
+    if skillsFolder then
+        for _, s in ipairs(skillsFolder:GetChildren()) do
+            if s:IsA("NumberValue") and (s:GetAttribute("UsingSkill") or 0) > 0 then
+                return false
+            end
+        end
+    end
+
+    return true
+end
+
+local function IsSkillKeyReady(char, key)
+    if not SkillBtnFrame then return false end
+    local btn = SkillBtnFrame:FindFirstChild(key)
+    if not btn or not btn.Visible then
+        return false
+    end
+    local lock = btn:FindFirstChild("Lock")
+    if lock and lock.Visible then
+        if IsAntiConfuseActive() then
+            lock.Visible = false
+        else
+            return false
+        end
+    end
+    local cd = btn:FindFirstChild("CD")
+    if cd and cd.Visible then
+        return false
+    end
+    local skillsFolder = cachedSkillsFolder or char:FindFirstChild("Skills")
+    if skillsFolder then
+        for _, s in ipairs(skillsFolder:GetChildren()) do
+            if s:IsA("NumberValue") and s:GetAttribute("Key") == key then
+                if s.Value > 0 or (s:GetAttribute("UsingSkill") or 0) > 0 then
+                    return false
+                end
+            end
+        end
+    end
+    return true
+end
+
+local rhythmLanes = {"A", "S", "D"}
+local rhythmKeyMap = {
+    A = Enum.KeyCode.A,
+    S = Enum.KeyCode.S,
+    D = Enum.KeyCode.D
+}
+local lastRhythmLaneHit = { A = 0, S = 0, D = 0 }
+local lastRhythmScan = 0
+local CENTER_BAR_POS = UDim2.new(0.5, 0, 0.5, 0)
+local isLockingBar = false
+local barPosConn = nil
+local boundBar = nil
+
+local function LockFishingBar()
+    if isLockingBar then return end
+    if not FishingGui or not FishingGui.Visible or not FishingBar then return end
+    if not (Config.AutoReel or Config.AutoBoss or Config.AutoSecretBoss) then return end
+    isLockingBar = true
+    local char = cachedChar
+    if char and (tonumber(char:GetAttribute("GuildPower")) or 0) < 99999999 then
+        pcall(function()
+            char:SetAttribute("GuildPower", 99999999)
+            local stats = cachedStatsFolder or char:FindFirstChild("Stats")
+            local rp = stats and stats:FindFirstChild("RodPower")
+            if rp then
+                local orig = rp.Value
+                rp.Value = orig + 1
+                rp.Value = orig
+            end
+        end)
+    end
+    pcall(function()
+        FishingBar:TweenPosition(CENTER_BAR_POS, Enum.EasingDirection.InOut, Enum.EasingStyle.Linear, 0, true)
+        FishingBar.Position = CENTER_BAR_POS
+    end)
+    isLockingBar = false
+end
+
+local function BindFishingBarLock()
+    if FishingBar and FishingBar ~= boundBar then
+        if barPosConn then
+            pcall(function() barPosConn:Disconnect() end)
+            barPosConn = nil
+        end
+        boundBar = FishingBar
+        barPosConn = FishingBar:GetPropertyChangedSignal("Position"):Connect(function()
+            if not isLockingBar and FishingBar.Position.X.Scale ~= 0.5 then
+                LockFishingBar()
+            end
+        end)
+    end
+end
+
+BindFishingBarLock()
+
+local function TriggerGuiButton(btn)
+    if not btn then return false end
+    local triggered = false
+    if firesignal then
+        pcall(function()
+            firesignal(btn.MouseButton1Click)
+            triggered = true
+        end)
+    end
+    if not triggered and getconnections then
+        pcall(function()
+            for _, conn in pairs(getconnections(btn.MouseButton1Click)) do
+                if conn.Function then
+                    task.spawn(conn.Function)
+                    triggered = true
+                elseif conn.Fire then
+                    conn:Fire()
+                    triggered = true
+                end
+            end
+        end)
+    end
+    return triggered
+end
+
+RunService.RenderStepped:Connect(function()
+    if not FishingGui or not FishingGui.Visible then return end
+    BindFishingBarLock()
+    LockFishingBar()
+end)
+
+RunService.Stepped:Connect(function()
+    if not FishingGui or not FishingGui.Visible then return end
+    BindFishingBarLock()
+    LockFishingBar()
+end)
+
+RunService.Heartbeat:Connect(function()
+    if not FishingGui or not FishingGui.Visible then return end
+
+    local activeFinal = Config.AutoMiniGame or Config.AutoBoss or Config.AutoSecretBoss
+
+    BindFishingBarLock()
+    LockFishingBar()
+
+    if activeFinal and RhythmGui and RhythmGui.Visible then
+        local now = os.clock()
+        if now - lastRhythmScan < 0.035 then return end
+        lastRhythmScan = now
+
+        for _, lane in ipairs(rhythmLanes) do
+            if now - (lastRhythmLaneHit[lane] or 0) >= 0.06 then
+                local laneFrame = RhythmGui:FindFirstChild("Progression" .. lane)
+                if laneFrame then
+                    local barFrame = laneFrame:FindFirstChild("BarFrame")
+                    local targetY = barFrame and barFrame.Position.Y.Scale or 0.85
+                    local shouldHit = false
+                    for _, child in ipairs(laneFrame:GetChildren()) do
+                        if child.Name == "Note_FX" and child:IsA("GuiObject") and child.Visible then
+                            if math.abs(child.Position.Y.Scale - targetY) <= 0.16 then
+                                shouldHit = true
+                                break
+                            end
+                        end
+                    end
+                    if shouldHit then
+                        lastRhythmLaneHit[lane] = now
+                        local btn = laneFrame:FindFirstChild("Button")
+                        if not TriggerGuiButton(btn) then
+                            local kc = rhythmKeyMap[lane]
+                            if kc then
+                                pcall(function()
+                                    VirtualInputManager:SendKeyEvent(true, kc, false, game)
+                                    task.delay(0.02, function()
+                                        VirtualInputManager:SendKeyEvent(false, kc, false, game)
+                                    end)
+                                end)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+local function GetModelPart(obj)
+    if not obj then return nil end
+    if obj:IsA("BasePart") then return obj end
+    if obj:IsA("Model") then
+        return obj:FindFirstChild("HumanoidRootPart")
+            or obj:FindFirstChild("Head")
+            or obj.PrimaryPart
+            or obj:FindFirstChildWhichIsA("BasePart", true)
+    end
+    return obj:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function IsSecretBossEntity(obj)
+    if not obj then return false end
+    if obj:GetAttribute("Secret") == true or obj:GetAttribute("Rarity") == "Secret" then
+        return true
+    end
+    local rawName = tostring(obj:GetAttribute("Name") or obj:GetAttribute("FishName") or obj.Name)
+    local lowerName = string.lower(rawName)
+    if string.find(lowerName, "secret") or string.find(lowerName, "long diaohai") or string.find(lowerName, "wuzhi") then
+        return true
+    end
+    local inv = Info:FindFirstChild("Inventory")
+    local mod = inv and inv:FindFirstChild(rawName)
+    local data = GetModuleData(mod)
+    if data and (data.Secret == true or data.Rarity == "Secret" or (data.Boss == true and (tonumber(data.Chance) or 100) <= 1)) then
+        return true
+    end
+    return false
+end
+
+local function FindBossTarget(wantSecret)
+    local npcFolder = workspace:FindFirstChild("NPC")
+    local bossFolder = npcFolder and npcFolder:FindFirstChild("Boss")
+
+    if bossFolder then
+        for _, boss in ipairs(bossFolder:GetChildren()) do
+            local part = GetModelPart(boss)
+            if part then
+                local isSec = IsSecretBossEntity(boss)
+                if wantSecret and isSec then
+                    return boss, part
+                elseif not wantSecret and not isSec then
+                    return boss, part
+                end
+            end
+        end
+    end
+
+    if not wantSecret then
+        local wsBoss = workspace:FindFirstChild("Boss") or workspace:FindFirstChild("BossZone")
+        if wsBoss then
+            local part = GetModelPart(wsBoss)
+            if part then
+                return wsBoss, part
+            end
+        end
+    end
+
+    return nil, nil
+end
+
+local lastBossActionTick = 0
+local lastBossNotifyKey = ""
+local lastBossNotifyTick = 0
+
+local function NotifyBoss(title, content, key, cooldown)
+    local now = os.clock()
+    local cd = cooldown or 8
+    local k = key or (title .. "|" .. content)
+    if k == lastBossNotifyKey and (now - lastBossNotifyTick) < cd then
+        return
+    end
+    lastBossNotifyKey = k
+    lastBossNotifyTick = now
+    pcall(function()
+        Fluent:Notify({
+            Title = title,
+            Content = content,
+            Duration = 4
+        })
+    end)
+end
+
+local function GetButtonLabelText(obj)
+    if not obj then return "" end
+    if obj:IsA("TextButton") or obj:IsA("TextLabel") then
+        if obj.Text and obj.Text ~= "" then
+            return obj.Text
+        end
+    end
+    local lbl = obj:FindFirstChild("Title") or obj:FindFirstChild("TextLabel") or obj:FindFirstChildWhichIsA("TextLabel", true)
+    if lbl and lbl.Text then
+        return lbl.Text
+    end
+    return ""
+end
+
+local function FindBossMenuFrame()
+    if not MainGui then return nil end
+    local menu = MainGui:FindFirstChild("Menu")
+    if not menu then return nil end
+    for _, name in ipairs({"BossFight", "Boss", "BossMenu", "Raid", "SecretBoss"}) do
+        local f = menu:FindFirstChild(name)
+        if f and f:IsA("GuiObject") then
+            return f
+        end
+    end
+    for _, child in ipairs(menu:GetChildren()) do
+        if child:IsA("Frame") and child.Name ~= "Info" and child.Name ~= "Black" and child.Name ~= "Dialogue" then
+            local title = child:FindFirstChild("Title")
+            if title and title:IsA("TextLabel") and string.find(string.lower(title.Text), "boss") then
+                return child
+            end
+            if child:FindFirstChild("Normal", true) and child:FindFirstChild("Hard", true) and child:FindFirstChild("Nightmare", true) then
+                return child
+            end
+        end
+    end
+    return nil
+end
+
+local function GetBossRequirementSummary(bossFrame, bossName)
+    local missing = {}
+    local rodVal = PlayerData and PlayerData:FindFirstChild("FishingRod")
+    local curRodName = rodVal and rodVal.Value or ""
+    if curRodName == "" then
+        table.insert(missing, "No Fishing Rod equipped")
+    end
+
+    local char = LocalPlayer.Character
+    local stats = char and char:FindFirstChild("Stats")
+    local inv = Info:FindFirstChild("Inventory")
+    if inv and bossName then
+        local bossMod = inv:FindFirstChild(bossName)
+        local bossData = GetModuleData(bossMod)
+        local rodMod = curRodName ~= "" and inv:FindFirstChild(curRodName) or nil
+        local rodData = GetModuleData(rodMod)
+        if bossData and tonumber(bossData.Power) and rodData and tonumber(rodData.Power) then
+            local rodBonus = stats and stats:FindFirstChild("RodPower") and tonumber(stats.RodPower.Value) or 0
+            local fishBonus = stats and stats:FindFirstChild("FishPower") and tonumber(stats.FishPower.Value) or 0
+            local playerPower = tonumber(rodData.Power) + rodBonus
+            local bossEffPower = math.max(1, tonumber(bossData.Power) - fishBonus + 4)
+            if (playerPower / bossEffPower) <= 0.5 then
+                table.insert(missing, string.format("Low Power (%d/%d)", math.floor(playerPower), math.floor(bossEffPower)))
+            end
+        end
+    end
+
+    if bossFrame then
+        for _, desc in ipairs(bossFrame:GetDescendants()) do
+            if desc:IsA("TextLabel") and desc.Visible then
+                local txt = desc.Text or ""
+                local cur, req = string.match(txt, "^%s*(%d+)%s*/%s*(%d+)%s*$")
+                if cur and req then
+                    local nCur = tonumber(cur)
+                    local nReq = tonumber(req)
+                    if nCur and nReq and nCur < nReq then
+                        table.insert(missing, cur .. "/" .. req)
+                    end
+                end
+            end
+        end
+    end
+
+    return missing
+end
+
+local bossSummoned = false
+local bossSummonTick = 0
+
+local function CloseBossMenuFrame(bossFrame)
+    if not bossFrame or not bossFrame.Visible then return end
+    local closed = false
+    for _, desc in ipairs(bossFrame:GetDescendants()) do
+        if desc:IsA("GuiButton") and desc.Visible then
+            local bName = string.lower(desc.Name)
+            local bTxt = string.lower(GetButtonLabelText(desc))
+            local pName = desc.Parent and string.lower(desc.Parent.Name) or ""
+            if bName == "close" or bTxt == "x" or pName == "close" then
+                if TriggerGuiButton(desc) then
+                    closed = true
+                    break
+                end
+            end
+        end
+    end
+    if not closed then
+        pcall(function()
+            bossFrame.Visible = false
+        end)
+    end
+end
+
+local function CheckBossStatusOnToggle(wantSecret)
+    bossSummoned = false
+    bossSummonTick = 0
+    local title = wantSecret and "Auto Long DiaoHai" or "Auto Enzo"
+    local rodVal = PlayerData and PlayerData:FindFirstChild("FishingRod")
+    if not rodVal or rodVal.Value == "" then
+        NotifyBoss(title, "Failed: Requirements not met (No Fishing Rod equipped)!", "toggle_norod_" .. tostring(wantSecret), 2)
+        return
+    end
+    local bossObj = FindBossTarget(wantSecret)
+    if not bossObj then
+        NotifyBoss(title, "Failed: " .. (wantSecret and "Secret Boss" or "Boss") .. " not found on map!", "toggle_noboss_" .. tostring(wantSecret), 2)
+        return
+    end
+    local bossName = tostring(bossObj:GetAttribute("Name") or bossObj.Name)
+    local missing = GetBossRequirementSummary(FindBossMenuFrame(), bossName)
+    if #missing > 0 then
+        NotifyBoss(title, "Requirement Warning (" .. bossName .. "): " .. table.concat(missing, ", "), "toggle_warn_" .. bossName, 2)
+    else
+        NotifyBoss(title, "Requirements met! Hunting " .. bossName .. " [" .. tostring(Config.BossMode) .. "]", "toggle_ok_" .. bossName, 2)
+    end
+end
+
+local function ClickBossModeAndStart(bossFrame, bossName, mode, wantSecret)
+    if not bossFrame then return false end
+    local notifyTitle = wantSecret and "Auto Long DiaoHai" or "Auto Enzo"
+    local targetMode = mode or "Normal"
+    local targetLower = string.lower(targetMode)
+    local modeMatched = false
+
+    for _, desc in ipairs(bossFrame:GetDescendants()) do
+        if desc:IsA("TextLabel") then
+            local txt = string.lower(desc.Text or "")
+            if string.find(txt, "mode:") and string.find(txt, targetLower) then
+                modeMatched = true
+                break
+            end
+        end
+    end
+
+    if not modeMatched then
+        for _, desc in ipairs(bossFrame:GetDescendants()) do
+            if desc:IsA("GuiButton") and desc.Visible then
+                local bName = string.lower(desc.Name)
+                local bTxt = string.lower(GetButtonLabelText(desc))
+                local pName = desc.Parent and string.lower(desc.Parent.Name) or ""
+                if bName == targetLower or bTxt == targetLower or pName == targetLower then
+                    TriggerGuiButton(desc)
+                    task.wait(0.1)
+                    break
+                end
+            end
+        end
+    end
+
+    local inProgress = false
+    local startBtn = nil
+    local startBtnText = ""
+
+    local function scanStartButton()
+        inProgress = false
+        startBtn = nil
+        startBtnText = ""
+        for _, desc in ipairs(bossFrame:GetDescendants()) do
+            if desc:IsA("GuiButton") and desc.Visible and desc.Name ~= "Close" then
+                local bName = string.lower(desc.Name)
+                local rawTxt = GetButtonLabelText(desc)
+                local bTxt = string.lower(rawTxt)
+                local pName = desc.Parent and string.lower(desc.Parent.Name) or ""
+                local isModeBtn = (bName == "normal" or bName == "hard" or bName == "nightmare"
+                    or bTxt == "normal" or bTxt == "hard" or bTxt == "nightmare"
+                    or pName == "normal" or pName == "hard" or pName == "nightmare"
+                    or bTxt == "x" or pName == "close")
+                if not isModeBtn then
+                    if string.find(bTxt, "in progress") then
+                        inProgress = true
+                        startBtnText = rawTxt
+                    elseif bTxt ~= "" or bName == "start" or bName == "fight" or bName == "play" or bName == "enter" or bName == "button" then
+                        startBtn = desc
+                        startBtnText = rawTxt
+                    end
+                end
+            end
+        end
+    end
+
+    scanStartButton()
+
+    if inProgress then
+        bossSummoned = true
+        bossSummonTick = os.clock()
+        CloseBossMenuFrame(bossFrame)
+        NotifyBoss(
+            notifyTitle,
+            "Requirements met! Boss " .. tostring(bossName or "Boss") .. " [" .. targetMode .. "] is In Progress!",
+            "inprog_" .. tostring(bossName) .. "_" .. targetMode,
+            15
+        )
+        return true
+    end
+
+    if startBtn then
+        TriggerGuiButton(startBtn)
+    end
+
+    for _, rName in ipairs({"BossFight", "StartBossFight", "StartBoss", "Boss", "ChallengeBoss", "FightBoss"}) do
+        local ev = Events:FindFirstChild(rName)
+        if ev then
+            pcall(function()
+                if ev:IsA("RemoteEvent") then
+                    ev:FireServer(targetMode)
+                    if bossName then ev:FireServer(bossName, targetMode) end
+                elseif ev:IsA("RemoteFunction") then
+                    ev:InvokeServer(targetMode)
+                end
+            end)
+        end
+    end
+
+    task.wait(0.25)
+    scanStartButton()
+
+    if inProgress or (FishingGui and FishingGui.Visible) then
+        bossSummoned = true
+        bossSummonTick = os.clock()
+        CloseBossMenuFrame(bossFrame)
+        NotifyBoss(
+            notifyTitle,
+            "Success! Started Boss " .. tostring(bossName or "Boss") .. " [" .. targetMode .. "]!",
+            "start_ok_" .. tostring(bossName) .. "_" .. targetMode,
+            12
+        )
+        return true
+    else
+        local missing = GetBossRequirementSummary(bossFrame, bossName)
+        local reason = #missing > 0 and table.concat(missing, ", ") or (startBtnText ~= "" and startBtnText or "Missing Tickets/Crystals or on Cooldown")
+        NotifyBoss(
+            notifyTitle,
+            "Failed (Requirements not met): " .. tostring(bossName or "Boss") .. " [" .. targetMode .. "] - " .. reason,
+            "start_fail_" .. tostring(bossName) .. "_" .. targetMode,
+            10
+        )
+        return false
+    end
+end
+
+local lastCaughtBossTick = 0
+local lastCaughtFishName = ""
+
+do
+    local repEv = Events:FindFirstChild("ReplicateFishCaught")
+    if repEv and repEv:IsA("RemoteEvent") then
+        repEv.OnClientEvent:Connect(function(charModel, fishName)
+            if charModel == LocalPlayer.Character then
+                lastCaughtBossTick = os.clock()
+                lastCaughtFishName = tostring(fishName or "")
+                bossSummoned = false
+                bossSummonTick = 0
+                if Config.AutoBoss or Config.AutoSecretBoss then
+                    local notifyTitle = Config.AutoSecretBoss and "Auto Long DiaoHai" or "Auto Enzo"
+                    NotifyBoss(
+                        notifyTitle,
+                        "Success! Caught Boss: " .. lastCaughtFishName .. "!",
+                        "caught_" .. lastCaughtFishName .. "_" .. tostring(math.floor(lastCaughtBossTick)),
+                        1
+                    )
+                end
+            end
+        end)
+    end
+end
+
+local trackingBossFight = false
+
+local function MonitorBossMinigame()
+    if trackingBossFight then return end
+    local fishId = LocalPlayer:GetAttribute("FishID")
+    local fishesFolder = workspace:FindFirstChild("Fishes")
+    local fishObj = (fishId and fishesFolder) and fishesFolder:FindFirstChild(tostring(fishId)) or nil
+    if not fishObj then return end
+
+    trackingBossFight = true
+    task.spawn(function()
+        local notifyTitle = Config.AutoSecretBoss and "Auto Long DiaoHai" or "Auto Enzo"
+        local progBar = FishingGui and FishingGui:FindFirstChild("ProgressionBar")
+        local fNameLbl = progBar and progBar:FindFirstChild("FishName")
+        local fName = (fNameLbl and fNameLbl.Text ~= "" and fNameLbl.Text) or "Boss"
+        local hpObj = fishObj:FindFirstChild(LocalPlayer.UserId .. "_PlayerHealth")
+        local maxFishHp = tonumber(fishObj:GetAttribute("MaxHealth")) or 100
+
+        NotifyBoss(
+            notifyTitle,
+            "Fighting " .. fName .. " [" .. tostring(Config.BossMode) .. "]!",
+            "pull_" .. tostring(fishId),
+            5
+        )
+
+        local lastScale = 0.5
+        local lastHp = hpObj and hpObj.Value or 100
+        local lastFishVal = fishObj:IsA("ValueBase") and fishObj.Value or 0
+        local hadFinalPhase = false
+        local lastFinalHp = 1
+
+        while fishObj.Parent and (FishingGui and FishingGui.Visible) do
+            bossSummonTick = os.clock()
+            if hpObj then
+                lastHp = hpObj.Value
+            end
+            if fishObj:IsA("ValueBase") then
+                lastFishVal = fishObj.Value
+            end
+            if fishObj:GetAttribute("FinalPhase") == true then
+                hadFinalPhase = true
+            end
+            if fishObj:GetAttribute("FinalPhaseHP") ~= nil then
+                lastFinalHp = tonumber(fishObj:GetAttribute("FinalPhaseHP")) or lastFinalHp
+            end
+            if FishingBar then
+                lastScale = FishingBar.Position.X.Scale
+            end
+            task.wait(0.1)
+        end
+
+        task.wait(0.35)
+        bossSummoned = false
+        bossSummonTick = 0
+        if os.clock() - lastCaughtBossTick < 2.5 then
+            trackingBossFight = false
+            return
+        end
+
+        local won = (hadFinalPhase and lastFinalHp <= 0) or (not hadFinalPhase and lastFishVal >= maxFishHp * 0.98 and lastHp > 0 and lastScale > 0.02 and lastScale < 0.98)
+        if won then
+            NotifyBoss(
+                notifyTitle,
+                "Success! Defeated Boss " .. fName .. "!",
+                "win_" .. tostring(fishId),
+                2
+            )
+        else
+            local failReason = "Line broke / Cancelled"
+            if lastHp <= 0 then
+                failReason = "Died (0 HP)"
+            elseif lastScale <= 0.02 or lastScale >= 0.98 then
+                failReason = "Out of bar"
+            elseif LocalPlayer.Character and LocalPlayer.Character:GetAttribute("Type") ~= "Fishing Rod" then
+                failReason = "Rod unequipped"
+            end
+            NotifyBoss(
+                notifyTitle,
+                "Failed fighting " .. fName .. ": " .. failReason .. "!",
+                "lose_" .. tostring(fishId),
+                2
+            )
+        end
+        trackingBossFight = false
+    end)
+end
+
+local function StepAutoBoss(char, isMinigame)
+    if isMinigame then
+        bossSummoned = true
+        bossSummonTick = os.clock()
+        MonitorBossMinigame()
+        return
+    end
+    local now = os.clock()
+    if now - lastBossActionTick < 0.8 then return end
+    lastBossActionTick = now
+
+    if bossSummoned and (now - bossSummonTick > 45) then
+        bossSummoned = false
+    end
+
+    local wantSecret = Config.AutoSecretBoss
+    local notifyTitle = wantSecret and "Auto Long DiaoHai" or "Auto Enzo"
+    local rodVal = PlayerData and PlayerData:FindFirstChild("FishingRod")
+    if not rodVal or rodVal.Value == "" then
+        NotifyBoss(notifyTitle, "Failed: Requirements not met (No Fishing Rod equipped)!", "step_norod", 10)
+        return
+    end
+
+    local bossObj, bossPart = FindBossTarget(wantSecret)
+    if not bossObj or not bossPart then
+        NotifyBoss(notifyTitle, "Failed: " .. (wantSecret and "Secret Boss" or "Boss") .. " not found on map!", "step_noboss_" .. tostring(wantSecret), 10)
+        return
+    end
+
+    local hrp = cachedHrp or (char and char:FindFirstChild("HumanoidRootPart"))
+    local bossName = bossObj and (bossObj:GetAttribute("Name") or bossObj.Name) or nil
+
+    if bossPart and hrp then
+        local dist = (hrp.Position - bossPart.Position).Magnitude
+        if dist > 12 then
+            hrp.CFrame = bossPart.CFrame * CFrame.new(0, 3, -5)
+        end
+    end
+
+    local bossFrame = FindBossMenuFrame()
+
+    if not bossSummoned then
+        if bossPart and hrp then
+            local prompt = bossObj and bossObj:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if prompt and fireproximityprompt then
+                pcall(function()
+                    fireproximityprompt(prompt)
+                end)
+            end
+        end
+
+        if bossFrame and bossFrame.Visible then
+            ClickBossModeAndStart(bossFrame, bossName, Config.BossMode, wantSecret)
+        end
+
+        if MainGui and not bossSummoned then
+            local menu = MainGui:FindFirstChild("Menu")
+            local dialogue = menu and menu:FindFirstChild("Dialogue")
+            if dialogue and dialogue.Visible then
+                local btnFrame = dialogue:FindFirstChild("ButtonFrame")
+                if btnFrame then
+                    local chosenBtn = nil
+                    local modeLower = string.lower(Config.BossMode or "Normal")
+                    for _, btn in ipairs(btnFrame:GetChildren()) do
+                        if btn:IsA("TextButton") and btn.Name ~= "Template" and btn.Visible then
+                            local title = btn:FindFirstChild("Title")
+                            local txt = title and string.lower(title.Text) or ""
+                            if string.find(txt, modeLower) then
+                                chosenBtn = btn
+                                break
+                            elseif not chosenBtn and not string.find(txt, "close") and not string.find(txt, "cancel") and not string.find(txt, "nevermind") and not string.find(txt, "leave") then
+                                chosenBtn = btn
+                            end
+                        end
+                    end
+                    if chosenBtn then
+                        TriggerGuiButton(chosenBtn)
+                    end
+                end
+            end
+        end
+    else
+        if bossFrame and bossFrame.Visible then
+            CloseBossMenuFrame(bossFrame)
+        end
+        if char then
+            if char:GetAttribute("Type") ~= "Fishing Rod" then
+                pcall(function()
+                    ToggleHotbar:InvokeServer("1")
+                end)
+            elseif not char:GetAttribute("Fishing") and hrp then
+                pcall(function()
+                    FishingEvent:FireServer(hrp.CFrame)
+                end)
+            end
+        end
+    end
+end
+
+task.spawn(function()
+    local lastCastTry = 0
+    local lastSkillTry = 0
+    while task.wait(0.12) do
+        local now = os.clock()
+        RefreshGuiCache()
+        local isMinigame = FishingGui and FishingGui.Visible or false
+        local activeReel = Config.AutoReel or Config.AutoBoss or Config.AutoSecretBoss
+        local activeCast = Config.AutoCast or Config.AutoBoss or Config.AutoSecretBoss
+        local activeSkill = Config.AutoSkill or Config.AutoBoss or Config.AutoSecretBoss
+
+        if activeReel and isMinigame then
+            pcall(function()
+                UpdateFishProgression:FireServer()
+            end)
+        end
+
+        if activeSkill and isMinigame and (now - lastSkillTry >= 0.45) then
+            local char = cachedChar
+            if char and IsGameAllowingSkill(char) then
+                for _, key in ipairs(Config.SkillOrder) do
+                    if IsSkillKeyReady(char, key) then
+                        lastSkillTry = os.clock()
+                        pcall(function()
+                            UseSkill:FireServer(key)
+                        end)
+                        break
+                    end
+                end
+            end
+        end
+
+        if Config.AutoBoss or Config.AutoSecretBoss then
+            StepAutoBoss(cachedChar, isMinigame)
+        elseif activeCast and not isMinigame and (now - lastCastTry >= 0.6) then
+            local char = cachedChar
+            if char then
+                if char:GetAttribute("Type") ~= "Fishing Rod" then
+                    lastCastTry = now
+                    pcall(function()
+                        ToggleHotbar:InvokeServer("1")
+                    end)
+                elseif not char:GetAttribute("Fishing") then
+                    local hrp = cachedHrp or char:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        lastCastTry = now + 0.9
+                        pcall(function()
+                            FishingEvent:FireServer(hrp.CFrame)
+                        end)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+Events:WaitForChild("Slam").OnClientEvent:Connect(function(remote)
+    if (Config.AutoReel or Config.AutoBoss or Config.AutoSecretBoss) and remote then
+        task.wait(0.05)
+        pcall(function()
+            remote:FireServer("Perfect")
+        end)
+        pcall(function()
+            local tc = FishingGui and FishingGui:FindFirstChild("TrashCan")
+            local slamGui = tc and tc:FindFirstChild("Slam")
+            if slamGui then slamGui:Destroy() end
+        end)
+    end
+end)
+
+Events:WaitForChild("Charge").OnClientEvent:Connect(function(remote)
+    if (Config.AutoReel or Config.AutoBoss or Config.AutoSecretBoss) and remote then
+        task.wait(0.05)
+        pcall(function()
+            remote:FireServer()
+        end)
+        pcall(function()
+            local tc = FishingGui and FishingGui:FindFirstChild("TrashCan")
+            local chargeGui = tc and tc:FindFirstChild("Charge")
+            if chargeGui then chargeGui:Destroy() end
+        end)
+    end
+end)
+
+local function clearPlayerESP()
+    for _, player in ipairs(Players:GetPlayers()) do
+        local char = player.Character
+        if char then
+            local head = char:FindFirstChild("Head")
+            if head then
+                local esp = head:FindFirstChild("namdzESP")
+                if esp then esp:Destroy() end
+            end
+        end
+    end
+end
+
+local function updateESP()
+    if not Config.ESPEnabled then return end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local char = player.Character
+            if char then
+                local head = char:FindFirstChild("Head")
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if head and hum then
+                    local esp = head:FindFirstChild("namdzESP")
+                    if hum.Health > 0 then
+                        if not esp then
+                            esp = Instance.new("BillboardGui")
+                            esp.Name = "namdzESP"
+                            esp.Adornee = head
+                            esp.Size = UDim2.new(0, 200, 0, 25)
+                            esp.StudsOffset = Vector3.new(0, 2.5, 0)
+                            esp.AlwaysOnTop = true
+                            esp.MaxDistance = math.huge
+                            local text = Instance.new("TextLabel")
+                            text.Name = "NameText"
+                            text.Parent = esp
+                            text.Size = UDim2.new(1, 0, 1, 0)
+                            text.BackgroundTransparency = 1
+                            text.TextScaled = false
+                            text.TextSize = 13
+                            text.Font = Enum.Font.GothamBold
+                            text.TextColor3 = Color3.fromRGB(255, 255, 255)
+                            text.TextStrokeTransparency = 0
+                            text.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+                            text.TextXAlignment = Enum.TextXAlignment.Center
+                            esp.Parent = head
+                        end
+                        esp.NameText.Text = player.DisplayName
+                    else
+                        if esp then esp:Destroy() end
+                    end
+                end
+            end
+        end
+    end
+end
+
+task.spawn(function()
+    while task.wait(0.4) do
+        if Config.ESPEnabled then
+            updateESP()
+        end
+    end
+end)
+
+local lastSellTime = 0
+local RemotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
+
+local function FindRemote(name)
+    return Events:FindFirstChild(name) or (RemotesFolder and RemotesFolder:FindFirstChild(name))
+end
+
+local function FireOrInvokeEvent(ev, ...)
+    if not ev then return false end
+    local args = {...}
+    local ok = pcall(function()
+        if ev:IsA("RemoteEvent") then
+            ev:FireServer(unpack(args))
+        elseif ev:IsA("RemoteFunction") then
+            ev:InvokeServer(unpack(args))
+        end
+    end)
+    return ok
+end
+
+local function ClickInventoryUIItem(targetName)
+    if not MainGui or not targetName or targetName == "" then return false end
+    local mainNode = MainGui:FindFirstChild("Main")
+    local fishInv = mainNode and mainNode:FindFirstChild("Fishing_INV")
+    local invMain = fishInv and fishInv:FindFirstChild("Main")
+    if not invMain then return false end
+    for _, desc in ipairs(invMain:GetDescendants()) do
+        if desc.Name == targetName or desc:GetAttribute("ItemName") == targetName then
+            local btn = (desc:IsA("GuiButton") and desc)
+                or desc:FindFirstChild("Equip", true)
+                or desc:FindFirstChild("Select", true)
+                or desc:FindFirstChild("Choose", true)
+                or desc:FindFirstChild("Button", true)
+                or desc:FindFirstChildWhichIsA("GuiButton", true)
+            if btn and TriggerGuiButton(btn) then
+                local equipBtn = invMain:FindFirstChild("Equip", true)
+                if equipBtn and equipBtn:IsA("GuiButton") then
+                    TriggerGuiButton(equipBtn)
+                end
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function DoBuyBait(baitName, amount)
+    if not baitName or baitName == "" then return end
+    local amt = math.max(1, math.floor(tonumber(amount) or 1))
+    local buyEvent = FindRemote("BuyBait") or FindRemote("Bait") or FindRemote("PurchaseBait") or FindRemote("BaitShop") or FindRemote("BuyItem")
+    if buyEvent then
+        FireOrInvokeEvent(buyEvent, baitName, amt)
+    else
+        pcall(function()
+            CraftBaitEvent:FireServer(baitName, amt)
+        end)
+    end
+end
+
+local function GetBestOwnedRod()
+    local rodInv = PlayerData:FindFirstChild("FishingRodInventory")
+    local invInfo = Info:FindFirstChild("Inventory")
+    if not rodInv or not invInfo then return nil end
+    local bestRod = nil
+    local bestPower = -1
+    for _, rodFolder in ipairs(rodInv:GetChildren()) do
+        local owned = rodFolder:FindFirstChild("Owned")
+        if owned and owned.Value == true then
+            local data = GetModuleData(invInfo:FindFirstChild(rodFolder.Name))
+            if data then
+                local pwr = tonumber(data.Power) or 0
+                if pwr > bestPower then
+                    bestPower = pwr
+                    bestRod = rodFolder.Name
+                end
+            end
+        end
+    end
+    return bestRod
+end
+
+local function ScoreItemData(data)
+    if type(data) ~= "table" then return 0 end
+    local score = (tonumber(data.Power) or 0) * 1000
+        + (tonumber(data.Boost) or 0) * 500
+        + (tonumber(data.Luck) or 0) * 200
+        + (tonumber(data.Price) or 0) * 0.01
+    if data.Ingredient then
+        score = score + 50000
+    end
+    if data.Rarity == "Secret" then
+        score = score + 1000000
+    elseif data.Rarity == "Mythical" then
+        score = score + 500000
+    elseif data.Rarity == "Legendary" then
+        score = score + 100000
+    end
+    return score
+end
+
+local function IsItemOwnedInFolder(folder, itemName)
+    if not folder then return false end
+    local entry = folder:FindFirstChild(itemName)
+    if not entry then return false end
+    if entry:IsA("BoolValue") then return entry.Value == true end
+    if entry:IsA("NumberValue") or entry:IsA("IntValue") then return entry.Value > 0 end
+    local owned = entry:FindFirstChild("Owned")
+    if owned and owned:IsA("BoolValue") then return owned.Value == true end
+    local qty = entry:FindFirstChild("Quantity") or entry:FindFirstChild("Amount") or entry:FindFirstChild("Value")
+    if qty and (qty:IsA("NumberValue") or qty:IsA("IntValue")) then return qty.Value > 0 end
+    return true
+end
+
+local function GetBestOwnedBait()
+    local baitInfo = Info:FindFirstChild("Bait")
+    if not baitInfo then return nil end
+    local bestBait = nil
+    local bestScore = -1
+    local baitDataFolder = PlayerData:FindFirstChild("Bait") or PlayerData:FindFirstChild("BaitInventory") or PlayerData:FindFirstChild("Baits")
+    local genInv = PlayerData:FindFirstChild("Inventory")
+    for _, mod in ipairs(baitInfo:GetChildren()) do
+        if mod:IsA("ModuleScript") then
+            local isOwned = IsItemOwnedInFolder(baitDataFolder, mod.Name) or IsItemOwnedInFolder(genInv, mod.Name)
+            if isOwned then
+                local data = GetModuleData(mod)
+                if data then
+                    local sc = ScoreItemData(data)
+                    if sc > bestScore then
+                        bestScore = sc
+                        bestBait = mod.Name
+                    end
+                end
+            end
+        end
+    end
+    return bestBait
+end
+
+local function GetBestOwnedOrb()
+    local orbInfo = Info:FindFirstChild("Orb")
+    if not orbInfo then return nil end
+    local bestOrb = nil
+    local bestScore = -1
+    local orbDataFolder = PlayerData:FindFirstChild("Orb") or PlayerData:FindFirstChild("OrbInventory") or PlayerData:FindFirstChild("Orbs")
+    local genInv = PlayerData:FindFirstChild("Inventory")
+    for _, mod in ipairs(orbInfo:GetChildren()) do
+        if mod:IsA("ModuleScript") then
+            local isOwned = IsItemOwnedInFolder(orbDataFolder, mod.Name) or IsItemOwnedInFolder(genInv, mod.Name)
+            if isOwned then
+                local data = GetModuleData(mod)
+                if data then
+                    local sc = ScoreItemData(data)
+                    if sc > bestScore then
+                        bestScore = sc
+                        bestOrb = mod.Name
+                    end
+                end
+            end
+        end
+    end
+    return bestOrb
+end
+
+local function TryEquipBestRod()
+    local bestRod = GetBestOwnedRod()
+    if not bestRod then return end
+    local curRodVal = PlayerData:FindFirstChild("FishingRod")
+    if curRodVal and curRodVal.Value == bestRod then return end
+    ClickInventoryUIItem(bestRod)
+    local ev = FindRemote("EquipRod")
+        or FindRemote("EquipFishingRod")
+        or FindRemote("ChangeRod")
+        or FindRemote("SelectRod")
+        or FindRemote("FishingRodInventory")
+        or FindRemote("FishingRod")
+        or FindRemote("Equip")
+    if ev then
+        FireOrInvokeEvent(ev, bestRod)
+        FireOrInvokeEvent(ev, "Rod", bestRod)
+    end
+end
+
+local function TryEquipBestBait()
+    local bestBait = GetBestOwnedBait()
+    if not bestBait then return end
+    local curRod = PlayerData:FindFirstChild("FishingRod") and PlayerData.FishingRod.Value or ""
+    ClickInventoryUIItem(bestBait)
+    local ev = FindRemote("EquipBait")
+        or FindRemote("ChangeBait")
+        or FindRemote("SelectBait")
+        or FindRemote("Bait")
+        or FindRemote("FishingRodInventory")
+        or FindRemote("Equip")
+    if ev then
+        FireOrInvokeEvent(ev, bestBait)
+        FireOrInvokeEvent(ev, "Bait", bestBait)
+        if curRod ~= "" then
+            FireOrInvokeEvent(ev, curRod, bestBait)
+        end
+    end
+end
+
+local function TryEquipBestOrb()
+    local bestOrb = GetBestOwnedOrb()
+    if not bestOrb then return end
+    local curRod = PlayerData:FindFirstChild("FishingRod") and PlayerData.FishingRod.Value or ""
+    ClickInventoryUIItem(bestOrb)
+    local ev = FindRemote("EquipOrb")
+        or FindRemote("ChangeOrb")
+        or FindRemote("SelectOrb")
+        or FindRemote("Orb")
+        or FindRemote("FishingRodInventory")
+        or FindRemote("Equip")
+    if ev then
+        FireOrInvokeEvent(ev, bestOrb)
+        FireOrInvokeEvent(ev, "Orb", bestOrb)
+        if curRod ~= "" then
+            FireOrInvokeEvent(ev, curRod, bestOrb)
+        end
+    end
+end
+
+task.spawn(function()
+    while task.wait(0.8) do
+        if Config.AutoSell then
+            local delaySec = math.clamp(tonumber(Config.SellDelay) or 1, 1, 10) * 60
+            local now = os.clock()
+            if now - lastSellTime >= delaySec then
+                lastSellTime = now
+                pcall(function()
+                    SellFish:FireServer("All")
+                end)
+            end
+        end
+        if Config.AutoBuyBait and Config.SelectedBuyBait ~= "" then
+            DoBuyBait(Config.SelectedBuyBait, Config.BuyBaitAmount)
+        end
+        if Config.AutoCraftBait and Config.SelectedBait ~= "" then
+            pcall(function()
+                CraftBaitEvent:FireServer(Config.SelectedBait, math.max(1, math.floor(tonumber(Config.BaitAmount) or 1)))
+            end)
+        end
+        if Config.AutoCraftRod and Config.SelectedRod ~= "" then
+            pcall(function()
+                CraftRodEvent:FireServer(Config.SelectedRod)
+            end)
+        end
+    end
+end)
+
+local function GetBuyableBaits()
+    local list = {}
+    local seen = {}
+    local baitFolder = Info:FindFirstChild("Bait")
+    if baitFolder then
+        for _, child in ipairs(baitFolder:GetChildren()) do
+            local data = GetModuleData(child)
+            if data and not data.Ingredient then
+                seen[child.Name] = true
+                table.insert(list, child.Name)
+            end
+        end
+    end
+    local itemFolder = Info:FindFirstChild("Item")
+    if itemFolder then
+        for _, child in ipairs(itemFolder:GetChildren()) do
+            if not seen[child.Name] then
+                local data = GetModuleData(child)
+                if data and data.Type == "Bait" and not data.Ingredient then
+                    seen[child.Name] = true
+                    table.insert(list, child.Name)
+                end
+            end
+        end
+    end
+    table.sort(list)
+    return list
+end
+
+local function GetCraftableBaits()
+    local list = {}
+    local baitFolder = Info:FindFirstChild("Bait")
+    if baitFolder then
+        for _, child in ipairs(baitFolder:GetChildren()) do
+            local data = GetModuleData(child)
+            if data and data.Ingredient then
+                table.insert(list, child.Name)
+            end
+        end
+    end
+    table.sort(list)
+    return list
+end
+
+local function GetCraftableRods()
+    local list = {}
+    local invFolder = Info:FindFirstChild("Inventory")
+    if invFolder then
+        for _, child in ipairs(invFolder:GetChildren()) do
+            local data = GetModuleData(child)
+            if data and data.Ingredient and data.Type == "Fishing Rod" then
+                table.insert(list, child.Name)
+            end
+        end
+    end
+    table.sort(list)
+    return list
+end
+
+local IslandTargets = {}
+
+local CanonicalIslandOrder = {
+    ["Beginning Isle"] = 1,
+    ["Bamboo Isle"] = 2,
+    ["Fallout Isle"] = 3,
+    ["Sovereign Isle"] = 4,
+    ["Perch Isle"] = 5,
+    ["Frost Isle"] = 6,
+    ["Coconut Isle"] = 7,
+    ["Amber Isle"] = 8,
+    ["Battlefield Isle"] = 9,
+    ["Mistpeak Isle"] = 10,
+    ["World Angler Isle"] = 11,
+    ["Weather Isle"] = 12,
+    ["Mystic Reef Isle"] = 13
+}
+
+local CanonicalIslandPower = {
+    ["Beginning Isle"] = 1,
+    ["Bamboo Isle"] = 19,
+    ["Fallout Isle"] = 32,
+    ["Sovereign Isle"] = 39,
+    ["Perch Isle"] = 48,
+    ["Frost Isle"] = 55,
+    ["Coconut Isle"] = 65,
+    ["Amber Isle"] = 75,
+    ["Battlefield Isle"] = 90,
+    ["Mistpeak Isle"] = 100,
+    ["World Angler Isle"] = 100,
+    ["Weather Isle"] = 100,
+    ["Mystic Reef Isle"] = 100
+}
+
+local function GetCanonicalIslandRank(name)
+    if CanonicalIslandOrder[name] then
+        return CanonicalIslandOrder[name]
+    end
+    local lowerName = string.lower(name)
+    for k, rank in pairs(CanonicalIslandOrder) do
+        local lk = string.lower(k)
+        if lowerName == lk or string.find(lowerName, lk, 1, true) or string.find(lk, lowerName, 1, true) then
+            return rank
+        end
+    end
+    return nil
+end
+
+local function GetCanonicalIslandPower(name)
+    if CanonicalIslandPower[name] then
+        return CanonicalIslandPower[name]
+    end
+    local lowerName = string.lower(name)
+    for k, pwr in pairs(CanonicalIslandPower) do
+        local lk = string.lower(k)
+        if lowerName == lk or string.find(lowerName, lk, 1, true) or string.find(lk, lowerName, 1, true) then
+            return pwr
+        end
+    end
+    return nil
+end
+
+local function GetIslandList()
+    local rawIslands = {}
+    local seen = {}
+    table.clear(IslandTargets)
+
+    local sp = workspace:FindFirstChild("Spawnpoint")
+    if not sp then return {} end
+
+    local startPart = sp:FindFirstChild("Beginning Isle")
+    local startPos = startPart and GetModelPart(startPart) and GetModelPart(startPart).Position or Vector3.zero
+
+    local compassOrder = {}
+    local compassPower = {}
+    if MainGui then
+        local menu = MainGui:FindFirstChild("Menu")
+        local compass = menu and menu:FindFirstChild("Compass")
+        local areaList = compass and compass:FindFirstChild("AreaList")
+        if areaList then
+            for _, item in ipairs(areaList:GetChildren()) do
+                if item:IsA("GuiObject") and item:FindFirstChild("Track") then
+                    local powerVal = nil
+                    for _, desc in ipairs(item:GetDescendants()) do
+                        if desc:IsA("TextLabel") and desc.Text then
+                            local m = string.match(desc.Text, "Power:%s*(%d+)")
+                            if m then
+                                powerVal = tonumber(m)
+                                break
+                            end
+                        end
+                    end
+                    if powerVal then
+                        compassPower[item.Name] = powerVal
+                    end
+                    local orderScore = (powerVal or 999) * 1000 + (item.LayoutOrder or 0)
+                    compassOrder[item.Name] = orderScore
+                end
+            end
+        end
+    end
+
+    for _, child in ipairs(sp:GetChildren()) do
+        local part = GetModelPart(child)
+        if part and not seen[child.Name] then
+            seen[child.Name] = true
+            local rank = GetCanonicalIslandRank(child.Name)
+            local weight
+            if rank then
+                weight = rank
+            elseif compassOrder[child.Name] then
+                weight = 1000 + compassOrder[child.Name]
+            else
+                weight = 1e7 + (part.Position - startPos).Magnitude
+            end
+            local pwr = compassPower[child.Name] or GetCanonicalIslandPower(child.Name)
+            table.insert(rawIslands, {
+                name = child.Name,
+                part = part,
+                weight = weight,
+                power = pwr
+            })
+        end
+    end
+
+    table.sort(rawIslands, function(a, b)
+        if a.weight ~= b.weight then
+            return a.weight < b.weight
+        end
+        return a.name < b.name
+    end)
+
+    local list = {}
+    for _, entry in ipairs(rawIslands) do
+        local label = entry.power and (entry.name .. " | " .. tostring(entry.power)) or entry.name
+        IslandTargets[label] = entry.part
+        IslandTargets[entry.name] = entry.part
+        table.insert(list, label)
+    end
+
+    return list
+end
+
+local function TeleportToIsland(islandName)
+    if not islandName or islandName == "" then return end
+    if not IslandTargets[islandName] then
+        GetIslandList()
+    end
+    local targetPart = IslandTargets[islandName]
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp and targetPart then
+        hrp.CFrame = targetPart.CFrame + Vector3.new(0, 5, 0)
+    end
+end
+
+local NPCTargets = {}
+
+local function GetNPCList()
+    local list = {}
+    local seen = {}
+    table.clear(NPCTargets)
+
+    local function addNPCModel(obj)
+        if not obj then return end
+        local part = GetModelPart(obj)
+        if not part then return end
+        local rawName = tostring(obj:GetAttribute("Name") or obj.Name)
+        if rawName == "" then return end
+        NPCTargets[rawName] = part
+        if not seen[rawName] then
+            seen[rawName] = true
+            table.insert(list, rawName)
+        end
+    end
+
+    local npcFolder = workspace:FindFirstChild("NPC")
+    if npcFolder then
+        for _, child in ipairs(npcFolder:GetChildren()) do
+            if child:IsA("Folder") then
+                if child.Name ~= "Boss" then
+                    for _, sub in ipairs(child:GetChildren()) do
+                        addNPCModel(sub)
+                    end
+                end
+            elseif child.Name ~= "Boss" then
+                addNPCModel(child)
+            end
+        end
+    end
+
+    for _, folderName in ipairs({"NPCPVP", "Merchant", "God"}) do
+        local f = workspace:FindFirstChild(folderName)
+        if f then
+            if f:IsA("Model") or f:IsA("BasePart") then
+                addNPCModel(f)
+            else
+                for _, child in ipairs(f:GetChildren()) do
+                    addNPCModel(child)
+                end
+            end
+        end
+    end
+
+    table.sort(list)
+    return list
+end
+
+local function TeleportToNPC(npcName)
+    if not npcName or npcName == "" then return end
+    local targetPart = NPCTargets[npcName]
+    if not targetPart or not targetPart.Parent then
+        GetNPCList()
+        targetPart = NPCTargets[npcName]
+    end
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp and targetPart and targetPart.Parent then
+        hrp.CFrame = targetPart.CFrame * CFrame.new(0, 3, -4)
+    end
+end
+
+local KnownCodes = {
+    "SeeYouSoon",
+    "BUGTrait",
+    "65KLikes",
+    "60KLikes",
+    "50KLikes",
+    "80KLikes",
+    "41MVisits",
+    "40MVisits",
+    "39MVisits",
+    "38MVisits",
+    "37MVisits",
+    "55MVisits",
+    "55MVistits",
+    "PVP",
+    "19KActives",
+    "AXO",
+    "Welcome",
+    "VermilionBird"
+}
+
+local function RedeemAllCodes()
+    task.spawn(function()
+        local codeSet = {}
+        for _, c in ipairs(KnownCodes) do
+            codeSet[c] = true
+        end
+        local function scanContainer(container)
+            if not container then return end
+            if container:IsA("ModuleScript") then
+                local ok, data = pcall(require, container)
+                if ok and type(data) == "table" then
+                    for k, v in pairs(data) do
+                        if type(k) == "string" then codeSet[k] = true end
+                        if type(v) == "string" then codeSet[v] = true end
+                    end
+                end
+            end
+            for _, child in ipairs(container:GetChildren()) do
+                codeSet[child.Name] = true
+                if child:IsA("StringValue") and child.Value ~= "" then
+                    codeSet[child.Value] = true
+                end
+            end
+        end
+        scanContainer(Info:FindFirstChild("Code"))
+        scanContainer(Info:FindFirstChild("Codes"))
+        scanContainer(PlayerData:FindFirstChild("Code"))
+        scanContainer(PlayerData:FindFirstChild("Codes"))
+
+        for code in pairs(codeSet) do
+            pcall(function()
+                RedeemCodeEvent:FireServer(code)
+            end)
+            task.wait(0.15)
+        end
+    end)
+end
+
+local OriginalLighting = {
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    FogEnd = Lighting.FogEnd,
+    FogStart = Lighting.FogStart,
+    GlobalShadows = Lighting.GlobalShadows,
+    Ambient = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient
+}
+
+local OriginalAtmosphere = {}
+for _, child in ipairs(Lighting:GetChildren()) do
+    if child:IsA("Atmosphere") then
+        OriginalAtmosphere[child] = {
+            Density = child.Density,
+            Haze = child.Haze,
+            Glare = child.Glare
+        }
+    end
+end
+
+local applyingLighting = false
+
+local function ApplyLightingSettings()
+    if applyingLighting then return end
+    applyingLighting = true
+    pcall(function()
+        if Config.FullBright then
+            Lighting.Brightness = 2
+            Lighting.ClockTime = 14
+            Lighting.GlobalShadows = false
+            Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+            Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+        end
+        if Config.NoFog then
+            Lighting.FogStart = 100000
+            Lighting.FogEnd = 100000
+            for _, child in ipairs(Lighting:GetChildren()) do
+                if child:IsA("Atmosphere") then
+                    if not OriginalAtmosphere[child] then
+                        OriginalAtmosphere[child] = {
+                            Density = child.Density,
+                            Haze = child.Haze,
+                            Glare = child.Glare
+                        }
+                    end
+                    child.Density = 0
+                    child.Haze = 0
+                    child.Glare = 0
+                end
+            end
+        end
+    end)
+    applyingLighting = false
+end
+
+local function RestoreFullBright()
+    applyingLighting = true
+    pcall(function()
+        Lighting.Brightness = OriginalLighting.Brightness
+        Lighting.ClockTime = OriginalLighting.ClockTime
+        Lighting.GlobalShadows = OriginalLighting.GlobalShadows
+        Lighting.Ambient = OriginalLighting.Ambient
+        Lighting.OutdoorAmbient = OriginalLighting.OutdoorAmbient
+    end)
+    applyingLighting = false
+end
+
+local function RestoreNoFog()
+    applyingLighting = true
+    pcall(function()
+        Lighting.FogStart = OriginalLighting.FogStart
+        Lighting.FogEnd = OriginalLighting.FogEnd
+        for atm, orig in pairs(OriginalAtmosphere) do
+            if atm and atm.Parent then
+                atm.Density = orig.Density
+                atm.Haze = orig.Haze
+                atm.Glare = orig.Glare
+            end
+        end
+    end)
+    applyingLighting = false
+end
+
+Lighting.Changed:Connect(function()
+    if Config.FullBright or Config.NoFog then
+        ApplyLightingSettings()
+    end
+end)
+
+ApplyLightingSettings()
+
+local LogoGui = Instance.new("ScreenGui")
+LogoGui.Name = "namdzLogoGui"
+LogoGui.ResetOnSpawn = false
+LogoGui.DisplayOrder = 10000
+pcall(function() LogoGui.Parent = game:GetService("CoreGui") end)
+if not LogoGui.Parent then LogoGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local LogoFrame = Instance.new("Frame")
+LogoFrame.Size = UDim2.new(0, 46, 0, 46)
+LogoFrame.Position = UDim2.new(0, 8, 0.5, -23)
+LogoFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 28)
+LogoFrame.BorderSizePixel = 0
+LogoFrame.Parent = LogoGui
+Instance.new("UICorner", LogoFrame).CornerRadius = UDim.new(0.2, 0)
+
+local logoStroke = Instance.new("UIStroke", LogoFrame)
+logoStroke.Thickness = 1.8
+logoStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+local logoGrad = Instance.new("UIGradient", logoStroke)
+logoGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(130, 0, 255)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 130, 255)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(130, 0, 255)),
+})
+task.spawn(function() TweenService:Create(logoGrad, TweenInfo.new(3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {Rotation = 180}):Play() end)
+
+local LogoImg = Instance.new("ImageLabel")
+LogoImg.Size = UDim2.new(1, -6, 1, -6)
+LogoImg.Position = UDim2.new(0, 3, 0, 3)
+LogoImg.BackgroundTransparency = 1
+LogoImg.Image = "rbxthumb://type=Asset&id=121794106771530&w=150&h=150"
+LogoImg.ScaleType = Enum.ScaleType.Fit
+LogoImg.Parent = LogoFrame
+
+local LogoBtn = Instance.new("TextButton")
+LogoBtn.Size = UDim2.new(1, 0, 1, 0)
+LogoBtn.BackgroundTransparency = 1
+LogoBtn.Text = ""
+LogoBtn.ZIndex = 5
+LogoBtn.Parent = LogoFrame
+
+do
+    local dragging, dragInput, dragStart, startPos = false, nil, nil, nil
+    LogoBtn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging, dragInput, dragStart, startPos = true, input, input.Position, LogoFrame.Position
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            LogoFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+            dragInput = nil
+        end
+    end)
+end
+
+local uiVisible = true
+local minimizeKey = Enum.KeyCode.LeftControl
+local lastToggleTime = 0
+local cachedMainHubFrame = nil
+
+local function toggleUI()
+    local now = tick()
+    if now - lastToggleTime < 0.3 then return end
+    lastToggleTime = now
+    uiVisible = not uiVisible
+    if cachedMainHubFrame and cachedMainHubFrame.Parent then
+        cachedMainHubFrame.Visible = uiVisible
+        return
+    end
+    for _, gui in ipairs(game:GetService("CoreGui"):GetChildren()) do
+        if gui:IsA("ScreenGui") then
+            for _, desc in ipairs(gui:GetDescendants()) do
+                if desc:IsA("TextLabel") and (desc.Text == "namdzHub" or desc.Text:find("namdz")) then
+                    local p = desc.Parent
+                    while p and p.Parent ~= gui do p = p.Parent end
+                    if p and p:IsA("Frame") then
+                        cachedMainHubFrame = p
+                        p.Visible = uiVisible
+                        return
+                    end
+                end
+            end
+        end
+    end
+end
+
+UserInputService.InputBegan:Connect(function(input, processed)
+    if UserInputService:GetFocusedTextBox() then return end
+    if not processed and input.KeyCode == minimizeKey then
+        uiVisible = not uiVisible
+    end
+end)
+
+local clickStartPos = Vector2.new()
+LogoBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        clickStartPos = Vector2.new(input.Position.X, input.Position.Y)
+    end
+end)
+LogoBtn.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        local dist = (Vector2.new(input.Position.X, input.Position.Y) - clickStartPos).Magnitude
+        if dist < 10 then
+            toggleUI()
+        end
+    end
+end)
+
+local Window = Fluent:CreateWindow({
+    Title = "namdzHub",
+    SubTitle = " | Heavyweigh Fishing",
+    TabWidth = 130,
+    Size = UDim2.fromOffset(460, 400),
+    Acrylic = false,
+    Theme = "Aqua",
+    MinimizeKey = Enum.KeyCode.LeftControl
+})
+
+local Tabs = {
+    Main = Window:AddTab({ Title = "Main", Icon = "home" }),
+    Player = Window:AddTab({ Title = "Player", Icon = "user" }),
+    Teleport = Window:AddTab({ Title = "Teleport", Icon = "map-pin" }),
+    Shop = Window:AddTab({ Title = "Shop", Icon = "shopping-cart" }),
+    ESP = Window:AddTab({ Title = "ESP", Icon = "eye" }),
+    Misc = Window:AddTab({ Title = "Misc", Icon = "layers" }),
+    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
+}
+
+local noclipFloatBtn, flyFloatBtn
+local noclipFloatStroke, flyFloatStroke
+local FlyToggleObj, NoclipToggleObj
+local updateFloatButtonsSize
+
+local function makeDraggableFloat(b, posKey)
+    local dragging, moved, startPos, startBtnPos, activeInput = false, false, nil, nil, nil
+    b.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging, moved, startPos, startBtnPos, activeInput = true, false, input.Position, b.Position, input
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                    activeInput = nil
+                    if moved and posKey then
+                        local p = b.Position
+                        Config[posKey] = { xs = p.X.Scale, xo = p.X.Offset, ys = p.Y.Scale, yo = p.Y.Offset }
+                        SaveConfig()
+                    end
+                end
+            end)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input == activeInput or input.UserInputType == Enum.UserInputType.MouseMovement) then
+            local delta = input.Position - startPos
+            if delta.Magnitude > 6 then moved = true end
+            b.Position = UDim2.new(startBtnPos.X.Scale, startBtnPos.X.Offset + delta.X, startBtnPos.Y.Scale, startBtnPos.Y.Offset + delta.Y)
+        end
+    end)
+    return function() return moved end, function() moved = false end
+end
+
+local function setFloatStrokeActive(stroke, active)
+    if not stroke then return end
+    local oldGradient = stroke:FindFirstChildOfClass("UIGradient")
+    if oldGradient then oldGradient:Destroy() end
+    local gradient = Instance.new("UIGradient")
+    if active then
+        stroke.Color = Color3.fromRGB(255, 255, 255)
+        stroke.Thickness = 2.2
+        gradient.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(170, 70, 255)),
+            ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 180, 255)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(170, 70, 255)),
+        })
+        gradient.Parent = stroke
+        task.spawn(function()
+            TweenService:Create(gradient, TweenInfo.new(3, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1), { Rotation = 360 }):Play()
+        end)
+    else
+        stroke.Color = Color3.fromRGB(255, 255, 255)
+        stroke.Thickness = 1.6
+        gradient.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(60, 0, 120)),
+            ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 100, 200)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(60, 0, 120)),
+        })
+        gradient.Parent = stroke
+        task.spawn(function()
+            TweenService:Create(gradient, TweenInfo.new(3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), { Rotation = 180 }):Play()
+        end)
+    end
+end
+
+local lastFlyToggleTime = 0
+local function toggleFly()
+    local now = tick()
+    if now - lastFlyToggleTime < 0.25 then return end
+    lastFlyToggleTime = now
+    if FlyToggleObj then
+        FlyToggleObj:SetValue(not Config.FlyEnabled)
+    else
+        Config.FlyEnabled = not Config.FlyEnabled
+        SaveConfig()
+        if Config.FlyEnabled then startFly() else stopFly() end
+        if flyFloatStroke and setFloatStrokeActive then
+            setFloatStrokeActive(flyFloatStroke, Config.FlyEnabled)
+        end
+    end
+end
+
+local lastNoclipToggleTime = 0
+local function toggleNoclip()
+    local now = tick()
+    if now - lastNoclipToggleTime < 0.25 then return end
+    lastNoclipToggleTime = now
+    if NoclipToggleObj then
+        NoclipToggleObj:SetValue(not Config.NoclipEnabled)
+    else
+        Config.NoclipEnabled = not Config.NoclipEnabled
+        SaveConfig()
+        if noclipFloatStroke and setFloatStrokeActive then
+            setFloatStrokeActive(noclipFloatStroke, Config.NoclipEnabled)
+        end
+    end
+end
+
+Tabs.Main:AddSection("Fishing")
+
+Tabs.Main:AddToggle("AutoCastToggle", {
+    Title = "Auto Cast",
+    Default = Config.AutoCast,
+    Callback = function(Value)
+        Config.AutoCast = Value
+        SaveConfig()
+    end
+})
+
+Tabs.Main:AddToggle("AutoReelToggle", {
+    Title = "Auto Reel",
+    Default = Config.AutoReel,
+    Callback = function(Value)
+        Config.AutoReel = Value
+        SaveConfig()
+    end
+})
+
+Tabs.Main:AddSection("Skill")
+
+Tabs.Main:AddToggle("AutoSkillToggle", {
+    Title = "Auto Skill",
+    Default = Config.AutoSkill,
+    Callback = function(Value)
+        Config.AutoSkill = Value
+        SaveConfig()
+    end
+})
+
+local allSkillKeys = {"Z", "X", "C", "V"}
+local SkillDropdown = Tabs.Main:AddDropdown("SelectSkillDropdown", {
+    Title = "Select Skill",
+    Values = allSkillKeys,
+    Default = Config.SkillOrder,
+    Multi = true
+})
+
+local origSkillDisplay = SkillDropdown.Display
+if origSkillDisplay then
+    SkillDropdown.Display = function(self, ...)
+        local savedValues = self.Values
+        self.Values = Config.SkillOrder
+        local res = origSkillDisplay(self, ...)
+        self.Values = savedValues
+        return res
+    end
+end
+
+SkillDropdown:OnChanged(function(Value)
+    if type(Value) ~= "table" then return end
+    for i = #Config.SkillOrder, 1, -1 do
+        local k = Config.SkillOrder[i]
+        if not Value[k] then
+            table.remove(Config.SkillOrder, i)
+        end
+    end
+    for _, k in ipairs(allSkillKeys) do
+        if Value[k] and not table.find(Config.SkillOrder, k) then
+            table.insert(Config.SkillOrder, k)
+        end
+    end
+    if SkillDropdown.Display then
+        SkillDropdown:Display()
+    end
+    SaveConfig()
+end)
+
+if SkillDropdown.Display then
+    SkillDropdown:Display()
+end
+
+Tabs.Main:AddSection("Boss")
+
+local bossModes = {"Normal", "Hard", "Nightmare"}
+if not table.find(bossModes, Config.BossMode) then
+    Config.BossMode = "Normal"
+end
+
+Tabs.Main:AddDropdown("SelectBossModeDropdown", {
+    Title = "Select Boss Mode",
+    Values = bossModes,
+    Default = Config.BossMode,
+    Multi = false,
+    Callback = function(Value)
+        Config.BossMode = Value or "Normal"
+        SaveConfig()
+    end
+})
+
+Tabs.Main:AddToggle("AutoBossToggle", {
+    Title = "Auto Enzo",
+    Default = Config.AutoBoss,
+    Callback = function(Value)
+        Config.AutoBoss = Value
+        SaveConfig()
+        if Value then
+            task.spawn(function()
+                CheckBossStatusOnToggle(false)
+            end)
+        end
+    end
+})
+
+Tabs.Main:AddToggle("AutoSecretBossToggle", {
+    Title = "Auto Long DiaoHai",
+    Default = Config.AutoSecretBoss,
+    Callback = function(Value)
+        Config.AutoSecretBoss = Value
+        SaveConfig()
+        if Value then
+            task.spawn(function()
+                CheckBossStatusOnToggle(true)
+            end)
+        end
+    end
+})
+
+Tabs.Main:AddToggle("AutoMiniGameToggle", {
+    Title = "Auto Mini Game",
+    Default = Config.AutoMiniGame,
+    Callback = function(Value)
+        Config.AutoMiniGame = Value
+        if Value and LocalPlayer.Character then
+            ApplyAntiConfuse(LocalPlayer.Character)
+        end
+        SaveConfig()
+    end
+})
+
+Tabs.Main:AddSection("Equipment")
+
+Tabs.Main:AddButton({
+    Title = "Equip Best Rod",
+    Callback = function()
+        TryEquipBestRod()
+    end
+})
+
+Tabs.Main:AddButton({
+    Title = "Equip Best Bait",
+    Callback = function()
+        TryEquipBestBait()
+    end
+})
+
+Tabs.Main:AddButton({
+    Title = "Equip Best Orb",
+    Callback = function()
+        TryEquipBestOrb()
+    end
+})
+
+Tabs.Player:AddSection("Movement")
+
+Tabs.Player:AddToggle("LoopSpeedToggle", {
+    Title = "Walk Speed",
+    Default = Config.LoopSpeedEnabled,
+    Callback = function(Value)
+        Config.LoopSpeedEnabled = Value
+        SaveConfig()
+    end
+})
+
+Tabs.Player:AddSlider("WalkSpeedSlider", {
+    Title = "Speed",
+    Default = Config.WalkSpeed,
+    Min = 16,
+    Max = 250,
+    Rounding = 0,
+    Callback = function(Value)
+        Config.WalkSpeed = Value
+        SaveConfig()
+    end
+})
+
+FlyToggleObj = Tabs.Player:AddToggle("FlyToggle", {
+    Title = "Fly",
+    Default = Config.FlyEnabled,
+    Callback = function(Value)
+        Config.FlyEnabled = Value
+        SaveConfig()
+        if Value then
+            startFly()
+        else
+            stopFly()
+        end
+        if flyFloatStroke then
+            setFloatStrokeActive(flyFloatStroke, Value)
+        end
+    end
+})
+
+Tabs.Player:AddSlider("FlySpeedSlider", {
+    Title = "Fly Speed",
+    Default = Config.FlySpeed,
+    Min = 1,
+    Max = 20,
+    Rounding = 1,
+    Callback = function(Value)
+        Config.FlySpeed = Value
+        SaveConfig()
+    end
+})
+
+NoclipToggleObj = Tabs.Player:AddToggle("NoclipToggle", {
+    Title = "Noclip",
+    Default = Config.NoclipEnabled,
+    Callback = function(Value)
+        Config.NoclipEnabled = Value
+        SaveConfig()
+        if noclipFloatStroke then
+            setFloatStrokeActive(noclipFloatStroke, Value)
+        end
+    end
+})
+
+Tabs.Player:AddToggle("InfJumpToggle", {
+    Title = "Infinite Jump",
+    Default = Config.InfJumpEnabled,
+    Callback = function(Value)
+        Config.InfJumpEnabled = Value
+        SaveConfig()
+    end
+})
+
+Tabs.Teleport:AddSection("Island")
+
+local islandList = GetIslandList()
+if (Config.SelectedIsland == "" or not table.find(islandList, Config.SelectedIsland)) and #islandList > 0 then
+    Config.SelectedIsland = islandList[1]
+end
+
+Tabs.Teleport:AddDropdown("SelectIslandDropdown", {
+    Title = "Select Island",
+    Values = islandList,
+    Default = Config.SelectedIsland ~= "" and Config.SelectedIsland or islandList[1],
+    Multi = false,
+    Callback = function(Value)
+        Config.SelectedIsland = Value or ""
+        SaveConfig()
+    end
+})
+
+Tabs.Teleport:AddButton({
+    Title = "Teleport To Island",
+    Callback = function()
+        TeleportToIsland(Config.SelectedIsland)
+    end
+})
+
+Tabs.Teleport:AddSection("NPC")
+
+local npcList = GetNPCList()
+if (Config.SelectedNPC == "" or not table.find(npcList, Config.SelectedNPC)) and #npcList > 0 then
+    Config.SelectedNPC = npcList[1]
+end
+
+local lastNPCSignature = table.concat(npcList, "|")
+
+local NPCDropdown = Tabs.Teleport:AddDropdown("SelectNPCDropdown", {
+    Title = "Select NPC",
+    Values = npcList,
+    Default = Config.SelectedNPC ~= "" and Config.SelectedNPC or npcList[1],
+    Multi = false,
+    Callback = function(Value)
+        Config.SelectedNPC = Value or ""
+        SaveConfig()
+    end
+})
+
+Tabs.Teleport:AddButton({
+    Title = "Teleport To NPC",
+    Callback = function()
+        TeleportToNPC(Config.SelectedNPC)
+    end
+})
+
+do
+    local npcRefreshPending = false
+    local function ScheduleNPCRefresh()
+        if npcRefreshPending then return end
+        npcRefreshPending = true
+        task.delay(0.8, function()
+            npcRefreshPending = false
+            local updated = GetNPCList()
+            local sig = table.concat(updated, "|")
+            if sig ~= lastNPCSignature then
+                lastNPCSignature = sig
+                if NPCDropdown and NPCDropdown.SetValues then
+                    pcall(function()
+                        NPCDropdown:SetValues(updated)
+                    end)
+                end
+                if (Config.SelectedNPC == "" or not table.find(updated, Config.SelectedNPC)) and #updated > 0 then
+                    Config.SelectedNPC = updated[1]
+                    if NPCDropdown and NPCDropdown.SetValue then
+                        pcall(function()
+                            NPCDropdown:SetValue(Config.SelectedNPC)
+                        end)
+                    end
+                end
+            end
+        end)
+    end
+
+    local npcFolder = workspace:FindFirstChild("NPC")
+    if npcFolder then
+        npcFolder.ChildAdded:Connect(ScheduleNPCRefresh)
+        npcFolder.ChildRemoved:Connect(ScheduleNPCRefresh)
+        for _, child in ipairs(npcFolder:GetChildren()) do
+            if child:IsA("Folder") and child.Name ~= "Boss" then
+                child.ChildAdded:Connect(ScheduleNPCRefresh)
+                child.ChildRemoved:Connect(ScheduleNPCRefresh)
+            end
+        end
+    end
+end
+
+Tabs.Shop:AddSection("Selling")
+
+Tabs.Shop:AddToggle("AutoSellToggle", {
+    Title = "Auto Sell All",
+    Default = Config.AutoSell,
+    Callback = function(Value)
+        Config.AutoSell = Value
+        if not Value then
+            lastSellTime = 0
+        end
+        SaveConfig()
+    end
+})
+
+Tabs.Shop:AddSlider("AutoSellDelaySlider", {
+    Title = "Sell Delay",
+    Default = math.clamp(tonumber(Config.SellDelay) or 1, 1, 10),
+    Min = 1,
+    Max = 10,
+    Rounding = 0,
+    Callback = function(Value)
+        Config.SellDelay = Value
+        SaveConfig()
+    end
+})
+
+Tabs.Shop:AddButton({
+    Title = "Sell All Fish",
+    Callback = function()
+        SellFish:FireServer("All")
+    end
+})
+
+Tabs.Shop:AddButton({
+    Title = "Sell One Fish",
+    Callback = function()
+        SellFish:FireServer("One")
+    end
+})
+
+Tabs.Shop:AddSection("Buy Bait")
+
+local buyBaitList = GetBuyableBaits()
+if Config.SelectedBuyBait == "" and #buyBaitList > 0 then
+    Config.SelectedBuyBait = buyBaitList[1]
+end
+
+Tabs.Shop:AddDropdown("SelectBuyBaitDropdown", {
+    Title = "Select Bait",
+    Values = buyBaitList,
+    Default = Config.SelectedBuyBait ~= "" and Config.SelectedBuyBait or buyBaitList[1],
+    Multi = false,
+    Callback = function(Value)
+        Config.SelectedBuyBait = Value or ""
+        SaveConfig()
+    end
+})
+
+Tabs.Shop:AddInput("BuyBaitAmountInput", {
+    Title = "Buy Amount",
+    Default = tostring(Config.BuyBaitAmount or 1),
+    Numeric = true,
+    Finished = false,
+    Placeholder = "1",
+    Callback = function(Value)
+        Config.BuyBaitAmount = math.max(1, math.floor(tonumber(Value) or 1))
+        SaveConfig()
+    end
+})
+
+Tabs.Shop:AddToggle("AutoBuyBaitToggle", {
+    Title = "Auto Buy Bait",
+    Default = Config.AutoBuyBait,
+    Callback = function(Value)
+        Config.AutoBuyBait = Value
+        SaveConfig()
+    end
+})
+
+Tabs.Shop:AddButton({
+    Title = "Buy Bait",
+    Callback = function()
+        DoBuyBait(Config.SelectedBuyBait, Config.BuyBaitAmount)
+    end
+})
+
+Tabs.Shop:AddSection("Craft Bait")
+
+local baitList = GetCraftableBaits()
+if Config.SelectedBait == "" and #baitList > 0 then
+    Config.SelectedBait = baitList[1]
+end
+
+Tabs.Shop:AddDropdown("SelectBaitDropdown", {
+    Title = "Select Bait",
+    Values = baitList,
+    Default = Config.SelectedBait ~= "" and Config.SelectedBait or baitList[1],
+    Multi = false,
+    Callback = function(Value)
+        Config.SelectedBait = Value or ""
+        SaveConfig()
+    end
+})
+
+Tabs.Shop:AddInput("BaitAmountInput", {
+    Title = "Craft Amount",
+    Default = tostring(Config.BaitAmount or 1),
+    Numeric = true,
+    Finished = false,
+    Placeholder = "1",
+    Callback = function(Value)
+        Config.BaitAmount = math.max(1, math.floor(tonumber(Value) or 1))
+        SaveConfig()
+    end
+})
+
+Tabs.Shop:AddToggle("AutoCraftBaitToggle", {
+    Title = "Auto Craft Bait",
+    Default = Config.AutoCraftBait,
+    Callback = function(Value)
+        Config.AutoCraftBait = Value
+        SaveConfig()
+    end
+})
+
+Tabs.Shop:AddButton({
+    Title = "Craft Bait",
+    Callback = function()
+        if Config.SelectedBait ~= "" then
+            CraftBaitEvent:FireServer(Config.SelectedBait, math.max(1, math.floor(tonumber(Config.BaitAmount) or 1)))
+        end
+    end
+})
+
+Tabs.Shop:AddSection("Craft Rod")
+
+local rodList = GetCraftableRods()
+if Config.SelectedRod == "" and #rodList > 0 then
+    Config.SelectedRod = rodList[1]
+end
+
+Tabs.Shop:AddDropdown("SelectRodDropdown", {
+    Title = "Select Rod",
+    Values = rodList,
+    Default = Config.SelectedRod ~= "" and Config.SelectedRod or rodList[1],
+    Multi = false,
+    Callback = function(Value)
+        Config.SelectedRod = Value or ""
+        SaveConfig()
+    end
+})
+
+Tabs.Shop:AddToggle("AutoCraftRodToggle", {
+    Title = "Auto Craft Rod",
+    Default = Config.AutoCraftRod,
+    Callback = function(Value)
+        Config.AutoCraftRod = Value
+        SaveConfig()
+    end
+})
+
+Tabs.Shop:AddButton({
+    Title = "Craft Rod",
+    Callback = function()
+        if Config.SelectedRod ~= "" then
+            CraftRodEvent:FireServer(Config.SelectedRod)
+        end
+    end
+})
+
+Tabs.ESP:AddToggle("ESPPlayers", {
+    Title = "ESP Players",
+    Default = Config.ESPEnabled,
+    Callback = function(Value)
+        Config.ESPEnabled = Value
+        SaveConfig()
+        if not Value then
+            clearPlayerESP()
+        end
+    end
+})
+
+Tabs.Misc:AddSection("Visual")
+
+Tabs.Misc:AddToggle("FullBrightToggle", {
+    Title = "FullBright",
+    Default = Config.FullBright,
+    Callback = function(Value)
+        Config.FullBright = Value
+        SaveConfig()
+        if Value then
+            ApplyLightingSettings()
+        else
+            RestoreFullBright()
+            if Config.NoFog then
+                ApplyLightingSettings()
+            end
+        end
+    end
+})
+
+Tabs.Misc:AddToggle("NoFogToggle", {
+    Title = "No Fog",
+    Default = Config.NoFog,
+    Callback = function(Value)
+        Config.NoFog = Value
+        SaveConfig()
+        if Value then
+            ApplyLightingSettings()
+        else
+            RestoreNoFog()
+            if Config.FullBright then
+                ApplyLightingSettings()
+            end
+        end
+    end
+})
+
+Tabs.Misc:AddSection("Codes")
+
+Tabs.Misc:AddButton({
+    Title = "Redeem All Codes",
+    Callback = function()
+        RedeemAllCodes()
+    end
+})
+
+Tabs.Settings:AddKeybind("ToggleUIKeybind", {
+    Title = "Minimize UI Keybind",
+    Mode = "Toggle",
+    Default = "LeftControl",
+    ChangedCallback = function(NewKey)
+        local keyCode = typeof(NewKey) == "EnumItem" and NewKey or Enum.KeyCode[tostring(NewKey)] or Enum.KeyCode.LeftControl
+        minimizeKey = keyCode
+        Window.MinimizeKey = keyCode
+    end
+})
+
+Tabs.Settings:AddSection("Keybinds")
+
+Tabs.Settings:AddToggle("DisableAllKeybindsToggle", {
+    Title = "Disable Keybinds",
+    Default = Config.DisableAllKeybinds or false,
+    Callback = function(Value)
+        Config.DisableAllKeybinds = Value
+        SaveConfig()
+    end
+})
+
+local function getFlyKey()
+    local k = Config.FlyKeybind or "F"
+    if typeof(k) == "EnumItem" then return k end
+    local name = tostring(k):gsub("Enum%.KeyCode%.", "")
+    return Enum.KeyCode[name] or Enum.KeyCode.F
+end
+
+Tabs.Settings:AddKeybind("FlyKeybind", {
+    Title = "Fly Keybind",
+    Mode = "Toggle",
+    Default = Config.FlyKeybind or "F",
+    Callback = function()
+        if not Config.DisableAllKeybinds and Config.FlyKeybindEnabled ~= false then
+            toggleFly()
+        end
+    end,
+    ChangedCallback = function(NewKey)
+        local keyCode = typeof(NewKey) == "EnumItem" and NewKey or Enum.KeyCode[tostring(NewKey):gsub("Enum%.KeyCode%.", "")]
+        if keyCode then
+            Config.FlyKeybind = keyCode.Name
+            SaveConfig()
+        end
+    end
+})
+
+local function getNoclipKey()
+    local k = Config.NoclipKeybind or "J"
+    if typeof(k) == "EnumItem" then return k end
+    local name = tostring(k):gsub("Enum%.KeyCode%.", "")
+    return Enum.KeyCode[name] or Enum.KeyCode.J
+end
+
+Tabs.Settings:AddKeybind("NoclipKeybind", {
+    Title = "Noclip Keybind",
+    Mode = "Toggle",
+    Default = Config.NoclipKeybind or "J",
+    Callback = function()
+        if not Config.DisableAllKeybinds and Config.NoclipKeybindEnabled ~= false then
+            toggleNoclip()
+        end
+    end,
+    ChangedCallback = function(NewKey)
+        local keyCode = typeof(NewKey) == "EnumItem" and NewKey or Enum.KeyCode[tostring(NewKey):gsub("Enum%.KeyCode%.", "")]
+        if keyCode then
+            Config.NoclipKeybind = keyCode.Name
+            SaveConfig()
+        end
+    end
+})
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if Config.DisableAllKeybinds then return end
+    if UserInputService:GetFocusedTextBox() then return end
+    if input.UserInputType == Enum.UserInputType.Keyboard then
+        if Config.FlyKeybindEnabled ~= false and input.KeyCode == getFlyKey() then
+            toggleFly()
+        elseif Config.NoclipKeybindEnabled ~= false and input.KeyCode == getNoclipKey() then
+            toggleNoclip()
+        end
+    end
+end)
+
+Tabs.Settings:AddSection("Float Buttons")
+
+Tabs.Settings:AddSlider("FloatSizeSlider", {
+    Title = "Float Size",
+    Default = Config.FloatSize or 46,
+    Min = 25,
+    Max = 100,
+    Rounding = 0,
+    Callback = function(Value)
+        if updateFloatButtonsSize then
+            updateFloatButtonsSize(Value)
+        end
+        SaveConfig()
+    end
+})
+
+Tabs.Settings:AddToggle("FloatNoclipToggle", {
+    Title = "Float Noclip",
+    Default = Config.NoclipFloatVisible or false,
+    Callback = function(Value)
+        if noclipFloatBtn then
+            noclipFloatBtn.Visible = Value
+        end
+        Config.NoclipFloatVisible = Value
+        SaveConfig()
+    end
+})
+
+Tabs.Settings:AddToggle("FloatFlyToggle", {
+    Title = "Float Fly",
+    Default = Config.FlyFloatVisible or false,
+    Callback = function(Value)
+        if flyFloatBtn then
+            flyFloatBtn.Visible = Value
+        end
+        Config.FlyFloatVisible = Value
+        SaveConfig()
+    end
+})
+
+local fSize = Config.FloatSize or 46
+local tSize = math.clamp(math.floor(fSize * 0.28), 10, 18)
+
+noclipFloatBtn = Instance.new("TextButton")
+local np = Config.NoclipFloatPos or { xs = 0.85, xo = 0, ys = 0.5, yo = -54 }
+noclipFloatBtn.Size = UDim2.new(0, fSize, 0, fSize)
+noclipFloatBtn.Position = UDim2.new(np.xs, np.xo, np.ys, np.yo)
+noclipFloatBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+noclipFloatBtn.BackgroundTransparency = 0.88
+noclipFloatBtn.BorderSizePixel = 0
+noclipFloatBtn.Text = "Noclip"
+noclipFloatBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+noclipFloatBtn.TextScaled = false
+noclipFloatBtn.TextSize = tSize
+noclipFloatBtn.Font = Enum.Font.GothamBold
+noclipFloatBtn.ZIndex = 15
+noclipFloatBtn.Visible = Config.NoclipFloatVisible or false
+noclipFloatBtn.Parent = LogoGui
+Instance.new("UICorner", noclipFloatBtn).CornerRadius = UDim.new(0, 8)
+noclipFloatStroke = Instance.new("UIStroke", noclipFloatBtn)
+noclipFloatStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+setFloatStrokeActive(noclipFloatStroke, Config.NoclipEnabled)
+
+local getNoclipMoved, resetNoclipMoved = makeDraggableFloat(noclipFloatBtn, "NoclipFloatPos")
+
+noclipFloatBtn.MouseButton1Click:Connect(function()
+    if getNoclipMoved() then resetNoclipMoved() return end
+    toggleNoclip()
+end)
+
+flyFloatBtn = Instance.new("TextButton")
+local fp = Config.FlyFloatPos or { xs = 0.85, xo = 0, ys = 0.5, yo = -108 }
+flyFloatBtn.Size = UDim2.new(0, fSize, 0, fSize)
+flyFloatBtn.Position = UDim2.new(fp.xs, fp.xo, fp.ys, fp.yo)
+flyFloatBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+flyFloatBtn.BackgroundTransparency = 0.88
+flyFloatBtn.BorderSizePixel = 0
+flyFloatBtn.Text = "Fly"
+flyFloatBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+flyFloatBtn.TextScaled = false
+flyFloatBtn.TextSize = tSize
+flyFloatBtn.Font = Enum.Font.GothamBold
+flyFloatBtn.ZIndex = 15
+flyFloatBtn.Visible = Config.FlyFloatVisible or false
+flyFloatBtn.Parent = LogoGui
+Instance.new("UICorner", flyFloatBtn).CornerRadius = UDim.new(0, 8)
+flyFloatStroke = Instance.new("UIStroke", flyFloatBtn)
+flyFloatStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+setFloatStrokeActive(flyFloatStroke, Config.FlyEnabled)
+
+local getFlyMoved, resetFlyMoved = makeDraggableFloat(flyFloatBtn, "FlyFloatPos")
+
+flyFloatBtn.MouseButton1Click:Connect(function()
+    if getFlyMoved() then resetFlyMoved() return end
+    toggleFly()
+end)
+
+updateFloatButtonsSize = function(size)
+    local s = tonumber(size) or 46
+    Config.FloatSize = s
+    local ts = math.clamp(math.floor(s * 0.28), 10, 18)
+    if noclipFloatBtn then
+        noclipFloatBtn.Size = UDim2.new(0, s, 0, s)
+        noclipFloatBtn.TextSize = ts
+    end
+    if flyFloatBtn then
+        flyFloatBtn.Size = UDim2.new(0, s, 0, s)
+        flyFloatBtn.TextSize = ts
+    end
+end
+
+Window:SelectTab(1)
+"
+ https://raw.githubusercontent.com/NoahTyrant/StarCrow/refs/heads/main/Heavyweigh%20Fishing#:~:text=local%20Fluent%20%3D%20loadstring,Window%3ASelectTab(1)
